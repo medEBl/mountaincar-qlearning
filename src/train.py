@@ -2,8 +2,8 @@
 
 Usage examples:
     python src/train.py
-    python src/train.py --episodes 20000
-    python src/train.py --episodes 5000 --eps-start 0.1
+    python src/train.py --episodes 20000 --eps-start 0.1
+    python src/train.py --episodes 20000 --eps-start 0.1 --alpha-end 0.01
 """
 import argparse
 import os
@@ -17,20 +17,25 @@ from agent import QLearningAgent
 from discretizer import Discretizer
 
 
-def linear_epsilon(ep, total, start=1.0, end=0.01, decay_frac=0.5):
-    """Epsilon goes linearly from `start` to `end` over the first `decay_frac` of training."""
-    return max(end, start - (start - end) * ep / (total * decay_frac))
+def linear_schedule(ep, total, start, end, decay_frac):
+    """Value goes linearly from `start` to `end` over the first `decay_frac` of training."""
+    return max(end, start - (start - end) * ep / (total * decay_frac)) if start >= end \
+        else min(end, start + (end - start) * ep / (total * decay_frac))
 
 
-def train(bins, episodes, alpha, gamma, seed, eps_start=1.0, eps_end=0.01, decay_frac=0.5):
-    """Run Q-learning for `episodes` episodes. Returns env, discretizer, agent, rewards list."""
+def train(bins, episodes, alpha, gamma, seed, eps_start=1.0, eps_end=0.01,
+          decay_frac=0.5, alpha_end=None):
+    """Run Q-learning. If alpha_end is given, alpha decays linearly from alpha to alpha_end
+    over the whole training (stabilizes the Q-table late in training)."""
     env = gym.make("MountainCar-v0")
     disc = Discretizer(env.observation_space.low, env.observation_space.high, bins)
     agent = QLearningAgent(bins, env.action_space.n, alpha, gamma, seed)
+    alpha_end = alpha if alpha_end is None else alpha_end
 
     returns = []
     for ep in range(episodes):
-        eps = linear_epsilon(ep, episodes, eps_start, eps_end, decay_frac)
+        eps = linear_schedule(ep, episodes, eps_start, eps_end, decay_frac)
+        agent.alpha = linear_schedule(ep, episodes, alpha, alpha_end, 1.0)
         obs, _ = env.reset(seed=seed * 100_000 + ep)
         s, total, done = disc(obs), 0.0, False
         while not done:
@@ -41,8 +46,8 @@ def train(bins, episodes, alpha, gamma, seed, eps_start=1.0, eps_end=0.01, decay
             s, total, done = s_next, total + r, terminated or truncated
         returns.append(total)
         if (ep + 1) % 500 == 0:
-            print(f"Episode {ep + 1:5d} | eps={eps:.3f} | avg reward (last 100) = "
-                  f"{np.mean(returns[-100:]):.1f}")
+            print(f"Episode {ep + 1:5d} | eps={eps:.3f} | alpha={agent.alpha:.4f} | "
+                  f"avg reward (last 100) = {np.mean(returns[-100:]):.1f}")
     return env, disc, agent, returns
 
 
@@ -53,7 +58,7 @@ def evaluate(env, disc, agent, n=100, seed=0):
         obs, _ = env.reset(seed=10_000_000 + seed * 1000 + k)
         s, total, done = disc(obs), 0.0, False
         while not done:
-            obs, r, terminated, truncated, _ = env.step(agent.act(s, 0.0))
+            obs, r, terminated, truncated, _ = env.step(agent.greedy(s))
             s, total, done = disc(obs), total + r, terminated or truncated
         scores.append(total)
     return np.mean(scores), np.std(scores)
@@ -64,6 +69,7 @@ if __name__ == "__main__":
     p.add_argument("--bins", type=int, default=20)
     p.add_argument("--episodes", type=int, default=5000)
     p.add_argument("--alpha", type=float, default=0.1)
+    p.add_argument("--alpha-end", type=float, default=None)
     p.add_argument("--gamma", type=float, default=0.99)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--eps-start", type=float, default=1.0)
@@ -72,7 +78,8 @@ if __name__ == "__main__":
     args = p.parse_args()
 
     env, disc, agent, returns = train(args.bins, args.episodes, args.alpha, args.gamma,
-                                      args.seed, args.eps_start, args.eps_end, args.decay_frac)
+                                      args.seed, args.eps_start, args.eps_end,
+                                      args.decay_frac, args.alpha_end)
     mean, std = evaluate(env, disc, agent, seed=args.seed)
     first_goal = next((i for i, r in enumerate(returns) if r > -200), None)
     print(f"\nFirst episode reaching the goal: {first_goal}")
@@ -81,7 +88,8 @@ if __name__ == "__main__":
 
     # save results
     os.makedirs("results", exist_ok=True)
-    tag = (f"bins{args.bins}_a{args.alpha}_g{args.gamma}_e{args.eps_start}"
+    a_tag = f"a{args.alpha}" + (f"-{args.alpha_end}" if args.alpha_end is not None else "")
+    tag = (f"bins{args.bins}_{a_tag}_g{args.gamma}_e{args.eps_start}"
            f"_ep{args.episodes}_s{args.seed}")
     pd.DataFrame({"episode": range(len(returns)), "reward": returns}).to_csv(
         f"results/returns_{tag}.csv", index=False)
