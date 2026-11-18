@@ -1,0 +1,7 @@
+,first_goal,first_goal,train_last100,train_last100,greedy_mean,greedy_mean
+,mean,std,mean,std,mean,std
+config,,,,,,
+bins12,194.7,57.6,-162.3,18.3,-165.3,31.4
+bins20,499.7,80.7,-144.3,4.8,-145.0,4.2
+bins20_alphadecay,536.0,112.6,-137.0,5.4,-138.3,7.7
+bins40,1805.3,49.1,-141.0,16.8,-143.0,17.5
